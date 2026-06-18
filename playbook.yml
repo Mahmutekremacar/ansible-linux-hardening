@@ -1,0 +1,157 @@
+---
+- name: Harden Ubuntu/Debian Server
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    ssh_port: 2222
+
+  handlers:
+    - name: Restart SSH
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+    - name: Restart Fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # Package Management
+    # -------------------------------------------------------------------------
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages to latest versions
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: true
+        autoclean: true
+
+    - name: Install security packages
+      ansible.builtin.apt:
+        name:
+          - ufw
+          - fail2ban
+          - unattended-upgrades
+          - apt-listchanges
+        state: present
+
+    # -------------------------------------------------------------------------
+    # Unattended Upgrades
+    # -------------------------------------------------------------------------
+    - name: Configure unattended-upgrades (20auto-upgrades)
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          APT::Periodic::AutocleanInterval "7";
+          APT::Periodic::Download-Upgradeable-Packages "1";
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Configure unattended-upgrades (50unattended-upgrades)
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+        content: |
+          Unattended-Upgrade::Allowed-Origins {
+              "${distro_id}:${distro_codename}";
+              "${distro_id}:${distro_codename}-security";
+              "${distro_id}ESMApps:${distro_codename}-apps-security";
+              "${distro_id}ESM:${distro_codename}-infra-security";
+          };
+          Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+          Unattended-Upgrade::Remove-Unused-Dependencies "true";
+          Unattended-Upgrade::Automatic-Reboot "false";
+          Unattended-Upgrade::Mail "root";
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Enable and start unattended-upgrades service
+      ansible.builtin.service:
+        name: unattended-upgrades
+        enabled: true
+        state: started
+
+    # -------------------------------------------------------------------------
+    # UFW Firewall
+    # -------------------------------------------------------------------------
+    - name: Set UFW default incoming policy to deny
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Set UFW default outgoing policy to allow
+      community.general.ufw:
+        direction: outgoing
+        policy: allow
+
+    - name: Allow SSH on custom port
+      community.general.ufw:
+        rule: allow
+        port: "{{ ssh_port }}"
+        proto: tcp
+        comment: "Custom SSH port"
+
+    - name: Enable UFW
+      community.general.ufw:
+        state: enabled
+
+    # -------------------------------------------------------------------------
+    # SSH Hardening
+    # -------------------------------------------------------------------------
+    - name: Harden sshd_config
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+        validate: /usr/sbin/sshd -t -f %s
+        backup: true
+      loop:
+        - { regexp: '^#?Port\s', line: "Port {{ ssh_port }}" }
+        - { regexp: '^#?PermitRootLogin\s', line: "PermitRootLogin no" }
+        - { regexp: '^#?PasswordAuthentication\s', line: "PasswordAuthentication no" }
+        - { regexp: '^#?ChallengeResponseAuthentication\s', line: "ChallengeResponseAuthentication no" }
+        - { regexp: '^#?UsePAM\s', line: "UsePAM yes" }
+        - { regexp: '^#?X11Forwarding\s', line: "X11Forwarding no" }
+        - { regexp: '^#?MaxAuthTries\s', line: "MaxAuthTries 3" }
+        - { regexp: '^#?LoginGraceTime\s', line: "LoginGraceTime 30" }
+        - { regexp: '^#?AllowAgentForwarding\s', line: "AllowAgentForwarding no" }
+        - { regexp: '^#?AllowTcpForwarding\s', line: "AllowTcpForwarding no" }
+      notify: Restart SSH
+
+    # -------------------------------------------------------------------------
+    # Fail2ban
+    # -------------------------------------------------------------------------
+    - name: Deploy Fail2ban jail configuration for SSH
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.d/sshd.conf
+        content: |
+          [sshd]
+          enabled  = true
+          port     = {{ ssh_port }}
+          filter   = sshd
+          logpath  = /var/log/auth.log
+          maxretry = 3
+          bantime  = 3600
+          findtime = 600
+          backend  = systemd
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart Fail2ban
+
+    - name: Enable and start Fail2ban service
+      ansible.builtin.service:
+        name: fail2ban
+        enabled: true
+        state: started
