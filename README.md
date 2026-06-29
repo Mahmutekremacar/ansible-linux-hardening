@@ -1,3 +1,45 @@
+RUN THIS AS ADMINISTRATOR ON YOUR CLIENTS (192.168.100.156, .161, .165)
+
+1. Enable PowerShell Remoting (starts the WinRM service and creates default rules)
+
+Enable-PSRemoting -Force
+
+2. Explicitly allow inbound traffic on TCP 5985 (WinRM HTTP) just to be safe
+
+New-NetFirewallRule -DisplayName "Allow WinRM 5985 (EDR Arena)" -Direction Inbound -LocalPort 5985 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue
+
+3. Allow Basic Authentication and Unencrypted traffic
+
+(This is strictly required for Python's 'pywinrm' library to connect successfully)
+
+Set-Item WSMan:\localhost\Service\Auth\Basic -Value $true -Force
+Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force
+
+4. Trust all hosts (allows your Python backend IP to connect)
+
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value "*" -Force
+
+5. Restart the service to apply the new auth configurations
+
+Restart-Service WinRM
+
+Write-Host "WinRM is now fully open for the EDR Arena!" -ForegroundColor Green
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Ansible Linux Server Hardening Playbook
 
 A production-ready, idempotent Ansible playbook that applies security hardening to a fresh Ubuntu/Debian server. Designed to bring a baseline server to a defensible posture in a single automated run.
